@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>English Pronunciation Coach</title>
+    <style>
+        :root { --primary: #4a90e2; --accent: #ff4757; --success: #2ed573; --bg: #f8f9fa; }
+        body { font-family: -apple-system, sans-serif; background-color: var(--bg); margin: 0; display: flex; justify-content: center; }
+        .container { background: white; max-width: 500px; width: 100%; min-height: 100vh; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; }
+        h1 { font-size: 1.1rem; color: #555; text-align: center; margin-bottom: 20px; }
+        .search-box { display: flex; gap: 8px; margin-bottom: 25px; }
+        input { flex: 1; padding: 14px; border: 2px solid #eee; border-radius: 15px; font-size: 16px; outline: none; }
+        .btn-search { background: var(--primary); color: white; border: none; border-radius: 15px; padding: 0 20px; font-weight: bold; cursor: pointer; }
+        .word-card { text-align: center; padding: 30px 10px; border-radius: 20px; border: 1px solid #f0f0f0; margin-bottom: 25px; }
+        #word { font-size: 3rem; font-weight: 800; margin: 0; color: #222; }
+        #ipa { font-size: 1.4rem; color: var(--primary); margin: 10px 0; min-height: 1.5rem; font-weight: bold; }
+        #meaning { font-size: 0.95rem; color: #777; line-height: 1.6; padding: 0 20px; }
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        button.action-btn { border: none; border-radius: 18px; padding: 15px; font-size: 1rem; font-weight: bold; cursor: pointer; }
+        .btn-model { background: #eef5ff; color: var(--primary); }
+        .btn-rec { background: #fff1f2; color: var(--accent); }
+        .btn-play-mine { background: #f0fff4; color: var(--success); grid-column: span 2; border: 1px solid var(--success); margin-top: 10px; }
+        #status { margin-top: 25px; text-align: center; min-height: 80px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>PRONUNCIATION COACH</h1>
+    <div class="search-box">
+        <input type="text" id="search-input" placeholder="英単語を入力...">
+        <button class="btn-search" onclick="searchWord()">検索</button>
+    </div>
+    <div class="word-card">
+        <p id="word">Ready?</p>
+        <p id="ipa"></p>
+        <div id="meaning">辞書を読み込んでいます...</div>
+    </div>
+    <div class="controls">
+        <button class="action-btn btn-model" onclick="playModel()">🔊 お手本</button>
+        <button class="action-btn btn-rec" onclick="toggleRecognition()">🎤 録音判定</button>
+        <button class="action-btn btn-play-mine" id="play-mine" style="display:none" onclick="playMyVoice()">👂 自分の声を聴く</button>
+    </div>
+    <div id="status"></div>
+</div>
+
+<script>
+    let dictionary = {};
+    let nativeAudioUrl = null;
+    let audioUrl = null;
+
+    fetch('ejdict.json')
+        .then(res => res.json())
+        .then(data => {
+            dictionary = data;
+            document.getElementById('meaning').innerText = "検索してください";
+        });
+
+    async function searchWord() {
+        const query = document.getElementById('search-input').value.trim();
+        if (!query) return;
+        const info = dictionary[query] || dictionary[query.toLowerCase()];
+        
+        if (info) {
+            document.getElementById('word').innerText = query;
+            document.getElementById('meaning').innerText = info;
+            document.getElementById('ipa').innerText = "読み込み中...";
+            nativeAudioUrl = null;
+
+            try {
+                // 外部APIから発音記号を再取得
+                const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${query}`);
+                const data = await res.json();
+                if (data[0]) {
+                    // 記号を表示（phonetic または phonetics配列から探す）
+                    const phonetic = data[0].phonetic || (data[0].phonetics.find(p => p.text)?.text) || "[No IPA]";
+                    document.getElementById('ipa').innerText = phonetic;
+                    // 音声を保存
+                    const audio = data[0].phonetics.find(p => p.audio !== "");
+                    if (audio) nativeAudioUrl = audio.audio;
+                }
+            } catch (e) {
+                document.getElementById('ipa').innerText = "[記号取得エラー]";
+            }
+        } else {
+            alert("単語が見つかりませんでした。小文字で試してください。");
+        }
+    }
+
+    function playModel() {
+        const word = document.getElementById('word').innerText;
+        if (nativeAudioUrl) {
+            new Audio(nativeAudioUrl).play();
+        } else {
+            const uttr = new SpeechSynthesisUtterance(word);
+            uttr.lang = 'en-US';
+            window.speechSynthesis.speak(uttr);
+        }
+    }
+
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = 'en-US';
+    let mediaRecorder;
+    let chunks = [];
+
+    async function toggleRecognition() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            chunks = [];
+            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'audio/wav' });
+                audioUrl = URL.createObjectURL(blob);
+                document.getElementById('play-mine').style.display = "block";
+            };
+            mediaRecorder.start();
+            recognition.start();
+            document.getElementById('status').innerText = "Listening...";
+            recognition.onresult = (e) => {
+                const result = e.results[0][0].transcript.toLowerCase();
+                const target = document.getElementById('word').innerText.toLowerCase();
+                document.getElementById('status').innerHTML = (result === target) ? 
+                    "<b style='color:green'>✅ Correct!</b>" : `<b style='color:red'>❌ Heard: ${result}</b>`;
+            };
+            recognition.onspeechend = () => {
+                mediaRecorder.stop();
+                recognition.stop();
+                stream.getTracks().forEach(t => t.stop());
+            };
+        } catch (err) { alert("マイクを許可してください"); }
+    }
+
+    function playMyVoice() { if (audioUrl) new Audio(audioUrl).play(); }
+</script>
+</body>
+</html>
